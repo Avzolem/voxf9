@@ -6,14 +6,7 @@ Presiona F9 para activar/desactivar
 
 import os
 import sys
-import json
 import threading
-import queue
-import time
-import zipfile
-import urllib.request
-import tkinter as tk
-from tkinter import ttk
 
 # Configuración
 SAMPLE_RATE = 16000
@@ -29,6 +22,46 @@ def get_app_path():
 
 APP_PATH = get_app_path()
 MODEL_PATH = os.path.join(APP_PATH, "model")
+SHORTCUTS_CREATED_FLAG = os.path.join(APP_PATH, ".shortcuts_created")
+
+def create_shortcuts():
+    """Crea accesos directos en el escritorio y en la carpeta de instalación"""
+    if os.path.exists(SHORTCUTS_CREATED_FLAG):
+        return
+
+    try:
+        import subprocess
+        exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+        icon_path = os.path.join(APP_PATH, "icon.ico")
+
+        if not os.path.exists(icon_path):
+            icon_path = exe_path
+
+        ps_script = f'''
+$WshShell = New-Object -ComObject WScript.Shell
+$DesktopShortcut = $WshShell.CreateShortcut("$env:USERPROFILE\\Desktop\\VoxF9.lnk")
+$DesktopShortcut.TargetPath = "{exe_path}"
+$DesktopShortcut.WorkingDirectory = "{APP_PATH}"
+$DesktopShortcut.IconLocation = "{icon_path}"
+$DesktopShortcut.Description = "VoxF9 - Voz a texto con F9"
+$DesktopShortcut.Save()
+$FolderShortcut = $WshShell.CreateShortcut("{APP_PATH}\\VoxF9.lnk")
+$FolderShortcut.TargetPath = "{exe_path}"
+$FolderShortcut.WorkingDirectory = "{APP_PATH}"
+$FolderShortcut.IconLocation = "{icon_path}"
+$FolderShortcut.Description = "VoxF9 - Voz a texto con F9"
+$FolderShortcut.Save()
+'''
+        subprocess.run(
+            ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            capture_output=True,
+            creationflags=0x08000000
+        )
+        with open(SHORTCUTS_CREATED_FLAG, 'w') as f:
+            f.write('1')
+    except Exception:
+        pass
+
 
 class ModelDownloader:
     """Descarga el modelo con barra de progreso"""
@@ -41,12 +74,14 @@ class ModelDownloader:
 
     def download_with_progress(self):
         """Muestra ventana de descarga"""
+        import tkinter as tk
+        from tkinter import ttk
+        import urllib.request
+
         self.root = tk.Tk()
         self.root.title("VoxF9 - Descargando modelo")
         self.root.geometry("450x120")
         self.root.resizable(False, False)
-
-        # Centrar ventana
         self.root.eval('tk::PlaceWindow . center')
 
         frame = ttk.Frame(self.root, padding=20)
@@ -61,18 +96,18 @@ class ModelDownloader:
         self.status = ttk.Label(frame, text="Iniciando...")
         self.status.pack()
 
-        # Iniciar descarga en thread
         threading.Thread(target=self._download, daemon=True).start()
-
         self.root.mainloop()
         return not self.cancelled
 
     def _download(self):
         """Descarga el archivo"""
+        import zipfile
+        import urllib.request
+
         zip_path = os.path.join(APP_PATH, "model.zip")
 
         try:
-            # Descargar
             def progress_hook(count, block_size, total_size):
                 if self.cancelled:
                     return
@@ -86,7 +121,6 @@ class ModelDownloader:
             if self.cancelled:
                 return
 
-            # Extraer
             self.root.after(0, lambda: self.label.config(text="Extrayendo modelo..."))
             self.root.after(0, lambda: self.progress.config(mode='indeterminate'))
             self.root.after(0, lambda: self.progress.start())
@@ -94,16 +128,13 @@ class ModelDownloader:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(APP_PATH)
 
-            # Renombrar carpeta
             extracted_path = os.path.join(APP_PATH, MODEL_NAME)
             if os.path.exists(MODEL_PATH):
                 import shutil
                 shutil.rmtree(MODEL_PATH)
             os.rename(extracted_path, MODEL_PATH)
 
-            # Limpiar
             os.remove(zip_path)
-
             self.root.after(0, self.root.destroy)
 
         except Exception as e:
@@ -126,30 +157,46 @@ def ensure_model():
             sys.exit(1)
 
 
-# Importar después de verificar modelo (para que el splash sea primero)
 def main():
     ensure_model()
 
-    import pyautogui
-    import keyboard
-    from vosk import Model, KaldiRecognizer, SetLogLevel
-    import sounddevice as sd
+    # Imports ligeros primero para mostrar icono rápido
     from PIL import Image, ImageDraw
     import pystray
-    import winsound
 
-    # Silenciar logs de Vosk
-    SetLogLevel(-1)
+    def create_icon_image(active=False, loading=False):
+        """Crea ícono de micrófono"""
+        size = 64
+        img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
 
-    # Optimizar pyautogui
-    pyautogui.FAILSAFE = False
-    pyautogui.PAUSE = 0
+        if loading:
+            bg_color = '#FFA726'  # Naranja = cargando
+        elif active:
+            bg_color = '#4CAF50'  # Verde = activo
+        else:
+            bg_color = '#607D8B'  # Gris = inactivo
+
+        draw.ellipse([2, 2, size-2, size-2], fill=bg_color)
+
+        white = '#FFFFFF'
+        cap_left, cap_right = 22, 42
+        cap_top, cap_bottom = 12, 38
+
+        draw.ellipse([cap_left, cap_top, cap_right, cap_top + 20], fill=white)
+        draw.rectangle([cap_left, cap_top + 10, cap_right, cap_bottom], fill=white)
+        draw.arc([16, 28, 48, 52], 0, 180, fill=white, width=3)
+        draw.rectangle([31, 46, 33, 54], fill=white)
+        draw.rectangle([24, 52, 40, 55], fill=white)
+
+        return img
 
     class VoxF9:
         def __init__(self):
             self.is_listening = False
             self.is_running = True
-            self.audio_queue = queue.Queue(maxsize=50)
+            self.is_ready = False
+            self.audio_queue = None
             self.model = None
             self.recognizer = None
             self.icon = None
@@ -157,41 +204,74 @@ def main():
             self.chars_written = 0
             self.lock = threading.Lock()
             self.stream = None
+            # Módulos cargados después
+            self.pyautogui = None
+            self.keyboard = None
+            self.sd = None
+            self.winsound = None
+            self.json = None
+            self.KaldiRecognizer = None
 
-        def load_model(self):
+        def load_all(self):
+            """Carga todos los módulos pesados en segundo plano"""
+            import queue
+            import json
+            import pyautogui
+            import keyboard
+            from vosk import Model, KaldiRecognizer, SetLogLevel
+            import sounddevice as sd
+            import winsound
+
+            SetLogLevel(-1)
+            pyautogui.FAILSAFE = False
+            pyautogui.PAUSE = 0
+
+            self.audio_queue = queue.Queue(maxsize=50)
+            self.json = json
+            self.pyautogui = pyautogui
+            self.keyboard = keyboard
+            self.sd = sd
+            self.winsound = winsound
+            self.KaldiRecognizer = KaldiRecognizer
+
+            # Cargar modelo (lo más pesado)
             self.model = Model(MODEL_PATH)
             self.reset_recognizer()
 
+            # Configurar hotkey
+            self.keyboard.on_press_key(TOGGLE_KEY, lambda _: self.toggle_listening(), suppress=False)
+
+            # Iniciar stream de audio
+            self.stream = self.sd.RawInputStream(
+                samplerate=SAMPLE_RATE,
+                blocksize=2000,
+                dtype='int16',
+                channels=1,
+                callback=self.audio_callback
+            )
+            self.stream.start()
+
+            # Iniciar procesador de audio
+            threading.Thread(target=self.process_audio, daemon=True).start()
+
+            # Marcar como listo y actualizar icono
+            self.is_ready = True
+            if self.icon:
+                self.icon.icon = create_icon_image(False, False)
+                self.icon.title = "VoxF9 - Listo (F9)"
+
+            # Crear shortcuts en background (no crítico)
+            threading.Thread(target=create_shortcuts, daemon=True).start()
+
         def reset_recognizer(self):
-            self.recognizer = KaldiRecognizer(self.model, SAMPLE_RATE)
+            self.recognizer = self.KaldiRecognizer(self.model, SAMPLE_RATE)
             self.recognizer.SetWords(False)
 
-        def create_icon(self, active=False):
-            """Crea ícono de micrófono"""
-            size = 64
-            img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(img)
-
-            bg_color = '#4CAF50' if active else '#607D8B'
-            draw.ellipse([2, 2, size-2, size-2], fill=bg_color)
-
-            white = '#FFFFFF'
-            cap_left, cap_right = 22, 42
-            cap_top, cap_bottom = 12, 38
-
-            draw.ellipse([cap_left, cap_top, cap_right, cap_top + 20], fill=white)
-            draw.rectangle([cap_left, cap_top + 10, cap_right, cap_bottom], fill=white)
-            draw.arc([16, 28, 48, 52], 0, 180, fill=white, width=3)
-            draw.rectangle([31, 46, 33, 54], fill=white)
-            draw.rectangle([24, 52, 40, 55], fill=white)
-
-            return img
-
         def audio_callback(self, indata, frames, time_info, status):
-            if self.is_listening:
+            if self.is_listening and self.audio_queue:
                 try:
                     self.audio_queue.put_nowait(bytes(indata))
-                except queue.Full:
+                except:
                     pass
 
         def write_fast(self, text):
@@ -200,22 +280,24 @@ def main():
             try:
                 import pyperclip
                 pyperclip.copy(text)
-                pyautogui.hotkey('ctrl', 'v')
+                self.pyautogui.hotkey('ctrl', 'v')
             except:
-                pyautogui.write(text, interval=0.005)
+                self.pyautogui.write(text, interval=0.005)
 
         def delete_chars(self, count):
             if count > 0:
-                pyautogui.press('backspace', presses=count, interval=0.003)
+                self.pyautogui.press('backspace', presses=count, interval=0.003)
 
         def process_audio(self):
+            import time
             while self.is_running:
                 if not self.is_listening:
-                    while not self.audio_queue.empty():
-                        try:
-                            self.audio_queue.get_nowait()
-                        except:
-                            break
+                    if self.audio_queue:
+                        while not self.audio_queue.empty():
+                            try:
+                                self.audio_queue.get_nowait()
+                            except:
+                                break
                     time.sleep(0.05)
                     continue
 
@@ -224,7 +306,7 @@ def main():
 
                     with self.lock:
                         if self.recognizer.AcceptWaveform(data):
-                            result = json.loads(self.recognizer.Result())
+                            result = self.json.loads(self.recognizer.Result())
                             text = result.get('text', '').strip()
 
                             if text:
@@ -233,7 +315,7 @@ def main():
                                 self.chars_written = 0
                                 self.last_partial = ""
                         else:
-                            partial = json.loads(self.recognizer.PartialResult())
+                            partial = self.json.loads(self.recognizer.PartialResult())
                             partial_text = partial.get('partial', '').strip()
 
                             if partial_text and partial_text != self.last_partial:
@@ -242,12 +324,13 @@ def main():
                                 self.chars_written = len(partial_text)
                                 self.last_partial = partial_text
 
-                except queue.Empty:
-                    continue
                 except:
                     pass
 
         def toggle_listening(self):
+            if not self.is_ready:
+                return
+
             with self.lock:
                 self.is_listening = not self.is_listening
                 self.last_partial = ""
@@ -255,7 +338,7 @@ def main():
 
                 if self.is_listening:
                     self.reset_recognizer()
-                    while not self.audio_queue.empty():
+                    while self.audio_queue and not self.audio_queue.empty():
                         try:
                             self.audio_queue.get_nowait()
                         except:
@@ -263,11 +346,11 @@ def main():
 
             self.update_icon()
             freq = 800 if self.is_listening else 400
-            threading.Thread(target=lambda: winsound.Beep(freq, 80), daemon=True).start()
+            threading.Thread(target=lambda: self.winsound.Beep(freq, 80), daemon=True).start()
 
         def update_icon(self):
             if self.icon:
-                self.icon.icon = self.create_icon(self.is_listening)
+                self.icon.icon = create_icon_image(self.is_listening, False)
                 status = "ACTIVO" if self.is_listening else "Inactivo"
                 self.icon.title = f"VoxF9 - {status}"
 
@@ -291,26 +374,17 @@ def main():
             os._exit(0)
 
         def toggle_from_menu(self, icon=None, item=None):
-            self.toggle_listening()
+            if self.is_ready:
+                self.toggle_listening()
 
         def get_status_text(self, item):
+            if not self.is_ready:
+                return "Cargando..."
             return "Desactivar (F9)" if self.is_listening else "Activar (F9)"
 
         def run(self):
-            self.load_model()
-
-            keyboard.on_press_key(TOGGLE_KEY, lambda _: self.toggle_listening(), suppress=False)
-
-            threading.Thread(target=self.process_audio, daemon=True).start()
-
-            self.stream = sd.RawInputStream(
-                samplerate=SAMPLE_RATE,
-                blocksize=2000,
-                dtype='int16',
-                channels=1,
-                callback=self.audio_callback
-            )
-            self.stream.start()
+            # Cargar módulos pesados en segundo plano
+            threading.Thread(target=self.load_all, daemon=True).start()
 
             menu = pystray.Menu(
                 pystray.MenuItem(self.get_status_text, self.toggle_from_menu, default=True),
@@ -318,10 +392,11 @@ def main():
                 pystray.MenuItem("Salir", self.quit_app)
             )
 
+            # Mostrar icono inmediatamente (naranja = cargando)
             self.icon = pystray.Icon(
                 name="VoxF9",
-                icon=self.create_icon(False),
-                title="VoxF9 - Inactivo",
+                icon=create_icon_image(False, True),
+                title="VoxF9 - Cargando...",
                 menu=menu
             )
 

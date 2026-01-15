@@ -30,3 +30,6 @@ Desktop.ini
 
 # Status local (no subir al repo)
 status.md
+
+# Flag de instalación
+.shortcuts_created
