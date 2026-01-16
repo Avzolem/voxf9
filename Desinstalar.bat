@@ -2,7 +2,7 @@
 title Desinstalar VoxF9
 echo.
 echo ========================================
-echo   DESINSTALAR VOICETYPE
+echo   DESINSTALAR VOXF9
 echo ========================================
 echo.
 echo Esto eliminara:

@@ -25,7 +25,7 @@ MODEL_PATH = os.path.join(APP_PATH, "model")
 SHORTCUTS_CREATED_FLAG = os.path.join(APP_PATH, ".shortcuts_created")
 
 def create_shortcuts():
-    """Crea accesos directos en el escritorio y en la carpeta de instalación"""
+    """Crea accesos directos en el escritorio, carpeta de instalación y desinstalador"""
     if os.path.exists(SHORTCUTS_CREATED_FLAG):
         return
 
@@ -33,24 +33,86 @@ def create_shortcuts():
         import subprocess
         exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
         icon_path = os.path.join(APP_PATH, "icon.ico")
+        uninstall_bat = os.path.join(APP_PATH, "Desinstalar.bat")
 
         if not os.path.exists(icon_path):
             icon_path = exe_path
 
+        # Crear Desinstalar.bat si no existe
+        if not os.path.exists(uninstall_bat):
+            uninstall_content = '''@echo off
+title Desinstalar VoxF9
+echo.
+echo ========================================
+echo   DESINSTALAR VOXF9
+echo ========================================
+echo.
+echo Esto eliminara:
+echo   - VoxF9.exe
+echo   - Modelo de voz (1.4 GB)
+echo   - Acceso directo del escritorio
+echo.
+set /p confirm="Estas seguro? (S/N): "
+if /i not "%confirm%"=="S" goto :cancel
+
+echo.
+echo [1/3] Cerrando VoxF9...
+taskkill /f /im VoxF9.exe >nul 2>&1
+timeout /t 2 >nul
+
+echo [2/3] Eliminando acceso directo...
+del "%USERPROFILE%\\Desktop\\VoxF9.lnk" 2>nul
+
+echo [3/3] Eliminando archivos del programa...
+set "FOLDER=%~dp0"
+
+:: Auto-eliminar la carpeta
+start /b "" cmd /c "timeout /t 2 >nul & rmdir /s /q "%FOLDER%""
+
+echo.
+echo ========================================
+echo   VoxF9 desinstalado correctamente
+echo ========================================
+echo.
+echo La ventana se cerrara automaticamente...
+timeout /t 3 >nul
+exit
+
+:cancel
+echo.
+echo Desinstalacion cancelada.
+pause
+'''
+            with open(uninstall_bat, 'w', encoding='utf-8') as f:
+                f.write(uninstall_content)
+
+        # Script PowerShell para crear accesos directos
         ps_script = f'''
 $WshShell = New-Object -ComObject WScript.Shell
+
+# Acceso directo en el escritorio
 $DesktopShortcut = $WshShell.CreateShortcut("$env:USERPROFILE\\Desktop\\VoxF9.lnk")
 $DesktopShortcut.TargetPath = "{exe_path}"
 $DesktopShortcut.WorkingDirectory = "{APP_PATH}"
 $DesktopShortcut.IconLocation = "{icon_path}"
 $DesktopShortcut.Description = "VoxF9 - Voz a texto con F9"
 $DesktopShortcut.Save()
+
+# Acceso directo en la carpeta de instalación
 $FolderShortcut = $WshShell.CreateShortcut("{APP_PATH}\\VoxF9.lnk")
 $FolderShortcut.TargetPath = "{exe_path}"
 $FolderShortcut.WorkingDirectory = "{APP_PATH}"
 $FolderShortcut.IconLocation = "{icon_path}"
 $FolderShortcut.Description = "VoxF9 - Voz a texto con F9"
 $FolderShortcut.Save()
+
+# Acceso directo del desinstalador con icono de papelera
+$UninstallShortcut = $WshShell.CreateShortcut("{APP_PATH}\\Desinstalar VoxF9.lnk")
+$UninstallShortcut.TargetPath = "{uninstall_bat}"
+$UninstallShortcut.WorkingDirectory = "{APP_PATH}"
+$UninstallShortcut.IconLocation = "shell32.dll,31"
+$UninstallShortcut.Description = "Desinstalar VoxF9 del equipo"
+$UninstallShortcut.Save()
 '''
         subprocess.run(
             ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
@@ -76,7 +138,6 @@ class ModelDownloader:
         """Muestra ventana de descarga"""
         import tkinter as tk
         from tkinter import ttk
-        import urllib.request
 
         self.root = tk.Tk()
         self.root.title("VoxF9 - Descargando modelo")
